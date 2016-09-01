@@ -18,7 +18,9 @@ The script has some interesting options disabled by default. You should read the
 
 
 The script is very configurable:
+
 ====================== OPTIONS ======================
+
 These are the options you can use before running this resource:
 	
 	set RHOSTS --> You can put here the network you want to test(192.168.0.1/24) or just the Ips of the devices you want to test (separate by spaces).")
@@ -48,8 +50,9 @@ Is a script for deleting all the workspaces created by AutoHackBruteOs.
 
 
 
+
+
+#Conditions
 The owner of this software made it with educational and didactic purposes and is not responsable of the use of it.
-
 The script can crash some device.
-
 Use the script with your OWN devices.
