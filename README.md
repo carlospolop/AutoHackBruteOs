@@ -42,17 +42,17 @@ These are the options you can use before running this resource:
 	set USEBASICDISCOVERY --> Default is false. Change this value is you want to use the resource 'simple_basic_discovery' (you must have it downloaded in the correct folder).
 
 
-#simply_basic_discovery 
+## simply_basic_discovery 
 Is a version of the script Basic_disovery adapted to be used more efficient with AutoHackBruteOs.
 
-#delete_AutoHackBruteOs_workspaces
+## delete_AutoHackBruteOs_workspaces
 Is a script for deleting all the workspaces created by AutoHackBruteOs.
 
 
 
 
 
-#Conditions
+## Conditions
 The owner of this software made it with educational and didactic purposes and is not responsable of the use of it.
 The script can crash some device.
 Use the script with your OWN devices.
